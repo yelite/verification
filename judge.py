@@ -2,6 +2,10 @@
 import os
 import csv
 import time
+import difflib
+import pprint
+import hashlib
+import subprocess
 
 from subprocess import Popen, PIPE
 from functools import lru_cache
@@ -20,7 +24,7 @@ massive_target = [
 ] * 8
 
 testcases = [
-    (1, ["random.txt"]),
+    (1, ["king-james-version-bible.txt", "war-and-peace.txt"]),
     (2, ["random.txt", "random2.txt"]),
     (2, massive_target[:]),
     (4, massive_target[:]),
@@ -72,15 +76,23 @@ def scan_missing_class():
 def test_output(test_arguments, threads, path='.', cls_name='wordcount'):
     p = Popen(['java', '-cp', path, '-Dfile.encoding=utf-8', cls_name, str(threads)] + test_arguments,
               stdout=PIPE)
-    stdout, _ = p.communicate()
+    stdout, _ = p.communicate(timeout=20)
+
     return stdout
+
+
+def get_cache_name(args):
+    h = hashlib.sha1()
+    for a in args:
+        h.update(a.encode())
+    return h.hexdigest()
 
 
 @lru_cache(16)
 def ref_output(*args):
-    cache_name = os.path.join(cache_folder, str(hash(args)))
+    cache_name = os.path.join(cache_folder, get_cache_name(args))
     if os.path.exists(cache_name):
-        return open(cache_name).read()
+        return open(cache_name, 'rb').read()
     else:
         p = Popen(['python', 'wordcount.py'] + list(args), stdout=PIPE)
         stdout, _ = p.communicate()
@@ -91,12 +103,18 @@ def ref_output(*args):
 
 def test(name, cls_path, cls_name, thread_num, args, result):
     t = time.time()
-    java_result = test_output(args, thread_num, cls_path, cls_name=cls_name)
-    result.record_time(name, time.time() - t)
+    try:
+        java_result = test_output(args, thread_num, cls_path, cls_name=cls_name)
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    finally:
+        result.record_time(name, time.time() - t)
 
     ref_result = ref_output(*args)
 
     if java_result != ref_result:
+        pprint.pprint(list(difflib.unified_diff(java_result.decode().splitlines(keepends=True),
+                                                ref_result.decode().splitlines(keepends=True))))
         return "failed"
     else:
         return ""
@@ -161,6 +179,5 @@ def grade_homework(name=None, skips=None):
 
 
 if __name__ == '__main__':
-    # print('\n'.join(scan_missing_class()))
-    grade_homework(skips={"apple11"})
-    # compile_homework()
+    compile_homework()
+    grade_homework()
